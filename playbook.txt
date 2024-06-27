@@ -1,0 +1,75 @@
+- name: pull from git
+  environment:
+    GIT_SSL_NO_VERIFY: 'true'
+  git:
+     repo: "https://{{ gituserconfig }}:{{gitpassconfig|urlencode}}@gitlab.appsnp.ocbcnisp.com/towerjobschedule/ingress-nonprod-automatic.git"
+     dest: /app/cert-expired
+     version: script-check
+     update: yes
+     force: yes
+
+- name: Check that we are login
+  shell: |
+    oc login https://api.np.ocbcnisp.com:6443 --username='{{ ocpuser }}' --password='{{ ocppassword }}' --insecure-skip-tls-verify=true
+    oc whoami
+  no_log: false
+
+- name: Check Expired Cert
+  shell: |
+    sh /app/cert-expired/check-date.sh | awk '{print ($1 <= 9 )? "true":"false"}'
+  no_log: false
+  register: checkexpired
+  
+- name: Backup Etcd
+  when: checkexpired.stdout.find("true") != -1 
+  shell: |
+    oc -n ocp-etcd-backup create job backup-renew-ingress --from=cronjob/on-etcd-backup
+  no_log: false
+  register: checketcd 
+
+- name: Wait Backup Etcd Process
+  shell: |
+    sleep 135s
+  no_log: false
+
+- name: Check Job ETCD
+  when: checketcd.stdout.find("job.batch/backup-renew-ingress created") != -1
+  shell: |
+      oc wait --for=condition=complete job/backup-renew-ingress -n ocp-etcd-backup
+  no_log: false
+  register: checkjob  
+
+
+- name: Backup ETCD Manual Wait
+  when: checkjob.stdout.find("job.batch/backup-renew-ingress condition met") != -1
+  shell: |
+    echo "silahkan backup manual etcdnya"
+    sleep 300s
+  no_log: false
+  
+- name: Backup Openshift-Ingress-Operator(cert)
+  shell: |
+      cd /app/backup/
+      oc get secret router-ca -o yaml -n openshift-ingress-operator > router-ca_openshift-ingress-operator_backup.yaml
+      sleep 15s
+  no_log: false  
+
+- name: Backup Openshift-Ingress (router-cert-default)
+  shell: |
+      cd /app/backup/
+      oc get secret router-certs-default -o yaml -n openshift-ingress > router-certs-default_openshift-ingress_backup.yaml
+      sleep 15s
+  no_log: false    
+
+# - name: Delete secret router-ca and pod on openshift-ingress-operator 
+#   shell: |
+#       oc delete secret router-case -n devops-tools-uat
+#       oc delete pods --all -n devops-tools-uat
+#       sleep 15s
+#   no_log: false   
+
+# - name: Delete secret router-ca and pod on openshift-ingress-operator 
+#   shell: |
+#       oc delete pods --all -n devops-tools-uat
+#       sleep 15s
+#   no_log: false
